@@ -1,19 +1,19 @@
 # Portfolio Ops
 
-A shared dashboard for tracking joint stock holdings: live-researched holdings, a monthly
-US market events calendar, and an AI-generated daily brief that pulls current prices and
-news via web search — meant to replace a daily 15-30 min check-in call.
+A shared dashboard for tracking a stock portfolio as a group: live-researched holdings, a
+monthly US market events calendar, and an AI-generated daily brief that pulls current
+prices and news via web search — built to replace a recurring manual status check-in.
 
 ## How it works
 
 - **Frontend**: React + Vite (`src/`)
 - **Backend**: Vercel serverless functions (`api/`) that call the OpenAI API server-side,
-  so your API key never reaches the browser
-- **Storage**: Vercel KV (a hosted Redis), shared by anyone who opens the site — you and your
-  cousin will always see the same data
+  so the API key never reaches the browser
+- **Storage**: Vercel KV (a hosted Redis), shared by anyone who opens the site — everyone
+  with access sees the same live data
 - **Access control**: a shared-password gate (`middleware.js`) sits in front of the entire
-  site, including the `/api` routes — nobody gets in without the password, so a stranger
-  who finds the URL can't view your data or run up your OpenAI bill
+  site, including the `/api` routes, so a stranger who finds the URL can't view the data
+  or run up the OpenAI bill
 
 ## 1. Prerequisites
 
@@ -23,7 +23,7 @@ news via web search — meant to replace a daily 15-30 min check-in call.
 - An [OpenAI API key](https://platform.openai.com) — go to Settings -> API Keys. You'll need
   to add a payment method under Settings -> Billing, and your account needs access to a model
   that supports the `web_search` tool in the Responses API (e.g. `gpt-4.1`). Usage here is
-  pay-per-use (not a flat subscription) — for one household's daily brief + occasional
+  pay-per-use (not a flat subscription) — for a small group's daily brief + occasional
   new-holding lookups, expect this to be a light monthly cost, but keep an eye on the usage
   dashboard for the first week or two.
 
@@ -57,10 +57,13 @@ git push -u origin main
    - `OPENAI_API_KEY` = the key you generated in step 1
    - `APP_PASSWORD` = a password of your choice to gate access to the whole site (leave unset
      to disable the gate — **not recommended once the URL is public**)
-5. Deploy (or redeploy if it already ran once before you added the env vars).
+5. Go to **Settings -> Deployment Protection** and make sure Vercel's own authentication
+   (separate from `APP_PASSWORD`) is off, or scoped to preview deployments only — otherwise
+   visitors will be asked to log in with a Vercel account before they even reach the app.
+6. Deploy (or redeploy if it already ran once before you added the env vars).
 
-You'll get a live URL like `portfolio-ops-yourname.vercel.app` — share that with your cousin
-and you'll both be looking at the same live data.
+You'll get a live URL like `portfolio-ops-yourname.vercel.app` — share that with whoever
+should have access, and you'll all be looking at the same live data.
 
 ## 4. Running it locally (optional, for testing before you deploy)
 
@@ -75,6 +78,10 @@ to connect this folder to your Vercel project, then `vercel env pull .env.local`
 the same env vars Vercel has, and run `vercel dev` instead of `npm run dev` so the API routes
 work locally too.
 
+Note: `vercel dev` does not execute the password-gate middleware locally for non-Next.js
+projects (a known Vercel CLI limitation) — the site will be open in local dev regardless of
+`APP_PASSWORD`. The gate only takes effect once actually deployed to Vercel.
+
 ## Project structure
 
 ```
@@ -86,7 +93,8 @@ work locally too.
 │   ├── events.js           # Get/set events in KV
 │   ├── briefs.js           # Get/set brief history in KV
 │   ├── portfolio.js        # Get/set goal-tracker values in KV
-│   └── _store.js           # Shared KV helper used by the routes above
+│   ├── _store.js           # Shared KV helper used by the routes above
+│   └── _auth.js            # Shared auth check used by every route above
 ├── src/
 │   ├── App.jsx              # The dashboard UI
 │   ├── main.jsx
