@@ -39,6 +39,9 @@ storage.
 - API key must never be exposed to the browser — all model calls go through a backend
 - Free-tier hosting and database (cost is only the pay-per-use OpenAI API usage)
 - Should run locally for testing before every deploy
+- Usable on phone and tablet screens, not just desktop
+- Every `/api` route rejects unauthenticated requests even if `middleware.js` is ever
+  misconfigured (defense-in-depth, not a single point of failure)
 
 ## 3. Architecture
 
@@ -66,6 +69,19 @@ Browser  ->  middleware.js (shared-password gate)  ->  React/Vite frontend
   Routing Middleware locally for non-Next.js projects (a known Vercel CLI limitation) — it
   only takes effect once actually deployed to Vercel, so test the gate on a real deployment,
   not `vercel dev`.
+- **Defense-in-depth**: `api/_auth.js` exports `requireAuth(req, res)`, called at the top of
+  every `/api` handler. It re-checks the same cookie/password hash independently of
+  `middleware.js` (using Node's `crypto.timingSafeEqual` for a constant-time comparison), so
+  a future change to the middleware `matcher` can't silently leave an API route open.
+  `middleware.js` itself also rate-limits `/api/login` (max 8 failed attempts per IP per 5
+  minutes, tracked in Vercel KV) and uses a constant-time password comparison to resist
+  timing attacks.
+- **Response headers**: `vercel.json` sets `X-Content-Type-Options`, `X-Frame-Options: DENY`,
+  `Referrer-Policy`, and `Strict-Transport-Security` on every response.
+- **Input limits**: `analyze-holding` caps the ticker input at 40 characters; `daily-brief`
+  caps the `holdings`/`events` arrays at 100 items each; the KV store handler
+  (`api/_store.js`) rejects writes larger than 500KB. These guard against runaway OpenAI
+  costs and KV storage abuse from a buggy client, not just malicious input.
 
 ## 4. Prerequisites checklist
 
@@ -306,9 +322,19 @@ export default defineConfig({
 {
   "buildCommand": "vite build",
   "outputDirectory": "dist",
-  "framework": "vite"
+  "framework": "vite",
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains" }
+      ]
+    }
+  ]
 }
-
 ```
 
 #### `.gitignore`
@@ -346,10 +372,46 @@ APP_PASSWORD=
 #### `middleware.js`
 
 ```javascript
-import { next } from "@vercel/functions";
+import { next, ipAddress } from "@vercel/functions";
+import { kv } from "@vercel/kv";
 
 const COOKIE_NAME = "portfolio_auth";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+const MAX_LOGIN_ATTEMPTS = 8;
+const LOGIN_WINDOW_SECONDS = 5 * 60;
+
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+async function getFailedAttempts(ip) {
+  try {
+    return (await kv.get(`login_fail:${ip}`)) || 0;
+  } catch {
+    return 0; // fail open if KV is unreachable — don't lock everyone out
+  }
+}
+
+async function recordFailedAttempt(ip, attempts) {
+  try {
+    await kv.set(`login_fail:${ip}`, attempts + 1, { ex: LOGIN_WINDOW_SECONDS });
+  } catch {
+    // ignore — rate limiting is best-effort
+  }
+}
+
+async function clearFailedAttempts(ip) {
+  try {
+    await kv.del(`login_fail:${ip}`);
+  } catch {
+    // ignore
+  }
+}
 
 function parseCookies(header) {
   const cookies = {};
@@ -370,7 +432,7 @@ async function sha256Hex(text) {
     .join("");
 }
 
-function loginPage(error) {
+function loginPage(error, status = 401) {
   return new Response(
     `<!doctype html>
 <html lang="en">
@@ -380,7 +442,7 @@ function loginPage(error) {
 <title>Portfolio Ops — Sign in</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #0B0E14; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  body { margin: 0; min-height: 100vh; padding: 16px; display: flex; align-items: center; justify-content: center; background: #0B0E14; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
   form { width: 100%; max-width: 320px; padding: 28px; border: 1px solid #1B2028; border-radius: 12px; background: #0E1219; }
   h1 { font-size: 15px; font-weight: 700; color: #E8EAED; letter-spacing: 0.08em; margin: 0 0 4px; }
   p { font-size: 11.5px; color: #6B7280; margin: 0 0 18px; }
@@ -399,7 +461,7 @@ function loginPage(error) {
   </form>
 </body>
 </html>`,
-    { status: 401, headers: { "content-type": "text/html; charset=utf-8" } }
+    { status, headers: { "content-type": "text/html; charset=utf-8" } }
   );
 }
 
@@ -417,9 +479,17 @@ export default async function middleware(request) {
   const expectedHash = await sha256Hex(expected);
 
   if (request.method === "POST" && url.pathname === "/api/login") {
+    const ip = ipAddress(request) || "unknown";
+    const attempts = await getFailedAttempts(ip);
+    if (attempts >= MAX_LOGIN_ATTEMPTS) {
+      return loginPage("Too many attempts — try again in a few minutes.", 429);
+    }
+
     const form = await request.formData();
-    const password = form.get("password") || "";
-    if (password === expected) {
+    const password = String(form.get("password") || "");
+
+    if (timingSafeEqual(password, expected)) {
+      await clearFailedAttempts(ip);
       const res = new Response(null, { status: 303, headers: { Location: "/" } });
       res.headers.append(
         "Set-Cookie",
@@ -427,6 +497,8 @@ export default async function middleware(request) {
       );
       return res;
     }
+
+    await recordFailedAttempt(ip, attempts);
     return loginPage("Wrong password — try again.");
   }
 
@@ -490,15 +562,60 @@ body {
 
 ```
 
+#### `api/_auth.js`
+
+```javascript
+import crypto from "node:crypto";
+
+const COOKIE_NAME = "portfolio_auth";
+
+function parseCookies(header) {
+  const cookies = {};
+  if (!header) return cookies;
+  header.split(";").forEach((pair) => {
+    const idx = pair.indexOf("=");
+    if (idx === -1) return;
+    cookies[pair.slice(0, idx).trim()] = decodeURIComponent(pair.slice(idx + 1).trim());
+  });
+  return cookies;
+}
+
+// Defense-in-depth: middleware.js already gates every request before it reaches
+// these functions, but each route re-checks the auth cookie itself so a future
+// change to the middleware matcher can't silently leave the API open.
+export function requireAuth(req, res) {
+  const expected = process.env.APP_PASSWORD;
+  if (!expected) return true; // gate disabled — matches middleware.js's fail-open behavior
+
+  const expectedHash = crypto.createHash("sha256").update(expected).digest("hex");
+  const cookies = parseCookies(req.headers.cookie);
+  const provided = cookies[COOKIE_NAME] || "";
+
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expectedHash);
+  const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
+
+  if (!valid) {
+    res.status(401).json({ error: "Unauthorized" });
+    return false;
+  }
+  return true;
+}
+```
+
 #### `api/_store.js`
 
 ```javascript
 import { kv } from "@vercel/kv";
+import { requireAuth } from "./_auth.js";
+
+const MAX_PAYLOAD_CHARS = 500_000;
 
 // Shared helper: GET returns the stored value (or a default), POST overwrites it.
 // Every route using this shares one KV database, so both people see the same data.
 export function makeStoreHandler(key, defaultValue) {
   return async function handler(req, res) {
+    if (!requireAuth(req, res)) return;
     try {
       if (req.method === "GET") {
         const value = await kv.get(key);
@@ -506,6 +623,9 @@ export function makeStoreHandler(key, defaultValue) {
       }
       if (req.method === "POST") {
         const { value } = req.body || {};
+        if (JSON.stringify(value ?? null).length > MAX_PAYLOAD_CHARS) {
+          return res.status(413).json({ error: "Payload too large" });
+        }
         await kv.set(key, value);
         return res.status(200).json({ ok: true });
       }
@@ -515,7 +635,6 @@ export function makeStoreHandler(key, defaultValue) {
     }
   };
 }
-
 ```
 
 #### `api/holdings.js`
@@ -553,6 +672,8 @@ export default makeStoreHandler("portfolio", { startValue: "", currentValue: "" 
 #### `api/analyze-holding.js`
 
 ```javascript
+import { requireAuth } from "./_auth.js";
+
 function extractJSON(text) {
   const cleaned = text.replace(/```json|```/g, "").trim();
   const start = cleaned.search(/[[{]/);
@@ -591,10 +712,12 @@ function stripCitations(text) {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (!requireAuth(req, res)) return;
 
-  const { ticker } = req.body || {};
-  if (!ticker || typeof ticker !== "string") {
-    return res.status(400).json({ error: "Missing ticker" });
+  const raw = req.body?.ticker;
+  const ticker = typeof raw === "string" ? raw.trim() : "";
+  if (!ticker || ticker.length > 40) {
+    return res.status(400).json({ error: "Missing or invalid ticker" });
   }
 
   const prompt = `The user typed "${ticker}" to add a holding — it may be a company name, fund name, or a ticker symbol already. First, using web search if needed, resolve it to the correct, real stock/ETF ticker symbol (e.g. "Intel" -> "INTC", "Apple" -> "AAPL", "Alphabet" -> "GOOGL"). Use that resolved ticker symbol — never the raw input text — as the "ticker" field in your response.
@@ -646,6 +769,8 @@ Do not include any citations, footnote markers, source references, or links in a
 #### `api/fetch-events.js`
 
 ```javascript
+import { requireAuth } from "./_auth.js";
+
 function extractJSON(text) {
   const cleaned = text.replace(/```json|```/g, "").trim();
   const start = cleaned.search(/[[{]/);
@@ -684,6 +809,7 @@ function stripCitations(text) {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (!requireAuth(req, res)) return;
 
   const monthLabel = new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
   const prompt = `Using web search, find the key US stock market events for ${monthLabel}: FOMC/Fed rate decisions, CPI and PPI inflation reports, nonfarm payrolls / jobs report, GDP releases, and any other major scheduled macro data releases from the Federal Reserve, BLS, or Commerce Department. Use real, current dates for this month — search for the actual release calendar.
@@ -726,6 +852,8 @@ Include 5-10 events. Use tag "Key" for high-impact events (Fed decisions, CPI) a
 #### `api/daily-brief.js`
 
 ```javascript
+import { requireAuth } from "./_auth.js";
+
 const RULES = `Portfolio rules: keep 30–40% cash at all times. On short-term positions, exit at 15–20% profit if markets are volatile. On long-term positions, take a partial exit (sell ~50–75%) at 15–20% profit and let the rest ride. Annual target: 20% portfolio return.`;
 
 function extractJSON(text) {
@@ -768,10 +896,14 @@ function stripCitations(text) {
     .trim();
 }
 
+const MAX_LIST_ITEMS = 100;
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (!requireAuth(req, res)) return;
 
-  const { holdings = [], events = [] } = req.body || {};
+  const holdings = Array.isArray(req.body?.holdings) ? req.body.holdings.slice(0, MAX_LIST_ITEMS) : [];
+  const events = Array.isArray(req.body?.events) ? req.body.events.slice(0, MAX_LIST_ITEMS) : [];
   const tickerList = holdings.map((h) => h.ticker).join(", ");
   const upcoming = events.map((e) => `${e.name}${e.date ? ` (${e.date})` : ""} — ${e.tag}`).join("; ");
 
@@ -1123,9 +1255,14 @@ export default function App() {
         .spin { animation: spin 1s linear infinite; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-thumb { background: #2A3140; border-radius: 4px; }
+        @media (max-width: 480px) {
+          .app-header { padding: 16px 14px 14px !important; }
+          .app-main { padding: 14px 12px !important; }
+          .app-tabs { padding: 10px 12px 0 !important; }
+        }
       `}</style>
 
-      <header style={styles.header}>
+      <header className="app-header" style={styles.header}>
         <div style={styles.headerLeft}>
           <RadioTower size={20} color="#E8B94A" strokeWidth={1.75} />
           <div>
@@ -1150,7 +1287,7 @@ export default function App() {
         </div>
       </header>
 
-      <nav style={styles.tabs}>
+      <nav className="app-tabs" style={styles.tabs}>
         {[
           ["holdings", "Holdings", TrendingUp],
           ["events", "Events", CalendarClock],
@@ -1165,12 +1302,12 @@ export default function App() {
         ))}
       </nav>
 
-      <main style={styles.main}>
+      <main className="app-main" style={styles.main}>
         {tab === "holdings" && (
           <div>
             <div style={styles.sectionHead}>
               <span>{filteredHoldings.length} position{filteredHoldings.length === 1 ? "" : "s"}{sectorFilter !== "All" ? ` · ${sectorFilter}` : ""}</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
                 <span style={styles.mutedSmall}>Tap a row for the thesis</span>
                 <select value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)} style={styles.sectorSelect}>
                   {sectors.map((s) => (
@@ -1181,8 +1318,8 @@ export default function App() {
             </div>
 
             {!addingHolding ? (
-              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                <button onClick={() => setAddingHolding(true)} disabled={refreshingAll} style={{ ...styles.addBtn, flex: 1 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+                <button onClick={() => setAddingHolding(true)} disabled={refreshingAll} style={{ ...styles.addBtn, flex: 1, minWidth: 160 }}>
                   <Plus size={14} /> Add holding
                 </button>
                 <button onClick={refreshAllHoldings} disabled={refreshingAll} style={styles.refreshAllBtn}>
@@ -1315,7 +1452,7 @@ export default function App() {
 
         {tab === "brief" && (
           <div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: briefError ? 14 : 0 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: briefError ? 14 : 0 }}>
               <button onClick={generateBrief} disabled={loadingBrief} style={{ ...styles.generateBtn, marginBottom: 0 }}>
                 {loadingBrief ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
                 {loadingBrief ? "Researching holdings & events…" : "Generate today's brief"}
@@ -1695,7 +1832,7 @@ const styles = {
   tab: { display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: "#6B7280", padding: "9px 14px", fontSize: 12.5, fontWeight: 500, cursor: "pointer", borderBottom: "2px solid transparent", whiteSpace: "nowrap" },
   tabActive: { color: "#E8B94A", borderBottom: "2px solid #E8B94A" },
   main: { padding: "20px 24px", maxWidth: 980, margin: "0 auto" },
-  sectionHead: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#8B93A7", marginBottom: 12 },
+  sectionHead: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, fontSize: 12, color: "#8B93A7", marginBottom: 12 },
   mutedSmall: { fontSize: 11, color: "#5B6272" },
   sectorSelect: { background: "#0E1219", border: "1px solid #2A3140", color: "#C7CCD6", padding: "6px 10px", borderRadius: 7, fontSize: 11.5, outline: "none", cursor: "pointer" },
   rowRefreshBtn: { background: "transparent", border: "none", cursor: "pointer", color: "#6B7280", display: "flex", alignItems: "center", padding: 4 },

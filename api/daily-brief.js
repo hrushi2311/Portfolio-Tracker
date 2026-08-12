@@ -1,3 +1,5 @@
+import { requireAuth } from "./_auth.js";
+
 const RULES = `Portfolio rules: keep 30–40% cash at all times. On short-term positions, exit at 15–20% profit if markets are volatile. On long-term positions, take a partial exit (sell ~50–75%) at 15–20% profit and let the rest ride. Annual target: 20% portfolio return.`;
 
 function extractJSON(text) {
@@ -40,10 +42,14 @@ function stripCitations(text) {
     .trim();
 }
 
+const MAX_LIST_ITEMS = 100;
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (!requireAuth(req, res)) return;
 
-  const { holdings = [], events = [] } = req.body || {};
+  const holdings = Array.isArray(req.body?.holdings) ? req.body.holdings.slice(0, MAX_LIST_ITEMS) : [];
+  const events = Array.isArray(req.body?.events) ? req.body.events.slice(0, MAX_LIST_ITEMS) : [];
   const tickerList = holdings.map((h) => h.ticker).join(", ");
   const upcoming = events.map((e) => `${e.name}${e.date ? ` (${e.date})` : ""} — ${e.tag}`).join("; ");
 

@@ -1,3 +1,5 @@
+import { requireAuth } from "./_auth.js";
+
 function extractJSON(text) {
   const cleaned = text.replace(/```json|```/g, "").trim();
   const start = cleaned.search(/[[{]/);
@@ -36,6 +38,7 @@ function stripCitations(text) {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (!requireAuth(req, res)) return;
 
   const monthLabel = new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
   const prompt = `Using web search, find the key US stock market events for ${monthLabel}: FOMC/Fed rate decisions, CPI and PPI inflation reports, nonfarm payrolls / jobs report, GDP releases, and any other major scheduled macro data releases from the Federal Reserve, BLS, or Commerce Department. Use real, current dates for this month — search for the actual release calendar.

@@ -1,3 +1,5 @@
+import { requireAuth } from "./_auth.js";
+
 function extractJSON(text) {
   const cleaned = text.replace(/```json|```/g, "").trim();
   const start = cleaned.search(/[[{]/);
@@ -36,10 +38,12 @@ function stripCitations(text) {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (!requireAuth(req, res)) return;
 
-  const { ticker } = req.body || {};
-  if (!ticker || typeof ticker !== "string") {
-    return res.status(400).json({ error: "Missing ticker" });
+  const raw = req.body?.ticker;
+  const ticker = typeof raw === "string" ? raw.trim() : "";
+  if (!ticker || ticker.length > 40) {
+    return res.status(400).json({ error: "Missing or invalid ticker" });
   }
 
   const prompt = `The user typed "${ticker}" to add a holding — it may be a company name, fund name, or a ticker symbol already. First, using web search if needed, resolve it to the correct, real stock/ETF ticker symbol (e.g. "Intel" -> "INTC", "Apple" -> "AAPL", "Alphabet" -> "GOOGL"). Use that resolved ticker symbol — never the raw input text — as the "ticker" field in your response.

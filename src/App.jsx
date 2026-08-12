@@ -291,9 +291,14 @@ export default function App() {
         .spin { animation: spin 1s linear infinite; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-thumb { background: #2A3140; border-radius: 4px; }
+        @media (max-width: 480px) {
+          .app-header { padding: 16px 14px 14px !important; }
+          .app-main { padding: 14px 12px !important; }
+          .app-tabs { padding: 10px 12px 0 !important; }
+        }
       `}</style>
 
-      <header style={styles.header}>
+      <header className="app-header" style={styles.header}>
         <div style={styles.headerLeft}>
           <RadioTower size={20} color="#E8B94A" strokeWidth={1.75} />
           <div>
@@ -318,7 +323,7 @@ export default function App() {
         </div>
       </header>
 
-      <nav style={styles.tabs}>
+      <nav className="app-tabs" style={styles.tabs}>
         {[
           ["holdings", "Holdings", TrendingUp],
           ["events", "Events", CalendarClock],
@@ -333,12 +338,12 @@ export default function App() {
         ))}
       </nav>
 
-      <main style={styles.main}>
+      <main className="app-main" style={styles.main}>
         {tab === "holdings" && (
           <div>
             <div style={styles.sectionHead}>
               <span>{filteredHoldings.length} position{filteredHoldings.length === 1 ? "" : "s"}{sectorFilter !== "All" ? ` · ${sectorFilter}` : ""}</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
                 <span style={styles.mutedSmall}>Tap a row for the thesis</span>
                 <select value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)} style={styles.sectorSelect}>
                   {sectors.map((s) => (
@@ -349,8 +354,8 @@ export default function App() {
             </div>
 
             {!addingHolding ? (
-              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                <button onClick={() => setAddingHolding(true)} disabled={refreshingAll} style={{ ...styles.addBtn, flex: 1 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+                <button onClick={() => setAddingHolding(true)} disabled={refreshingAll} style={{ ...styles.addBtn, flex: 1, minWidth: 160 }}>
                   <Plus size={14} /> Add holding
                 </button>
                 <button onClick={refreshAllHoldings} disabled={refreshingAll} style={styles.refreshAllBtn}>
@@ -483,7 +488,7 @@ export default function App() {
 
         {tab === "brief" && (
           <div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: briefError ? 14 : 0 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: briefError ? 14 : 0 }}>
               <button onClick={generateBrief} disabled={loadingBrief} style={{ ...styles.generateBtn, marginBottom: 0 }}>
                 {loadingBrief ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
                 {loadingBrief ? "Researching holdings & events…" : "Generate today's brief"}
@@ -863,7 +868,7 @@ const styles = {
   tab: { display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: "#6B7280", padding: "9px 14px", fontSize: 12.5, fontWeight: 500, cursor: "pointer", borderBottom: "2px solid transparent", whiteSpace: "nowrap" },
   tabActive: { color: "#E8B94A", borderBottom: "2px solid #E8B94A" },
   main: { padding: "20px 24px", maxWidth: 980, margin: "0 auto" },
-  sectionHead: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#8B93A7", marginBottom: 12 },
+  sectionHead: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, fontSize: 12, color: "#8B93A7", marginBottom: 12 },
   mutedSmall: { fontSize: 11, color: "#5B6272" },
   sectorSelect: { background: "#0E1219", border: "1px solid #2A3140", color: "#C7CCD6", padding: "6px 10px", borderRadius: 7, fontSize: 11.5, outline: "none", cursor: "pointer" },
   rowRefreshBtn: { background: "transparent", border: "none", cursor: "pointer", color: "#6B7280", display: "flex", alignItems: "center", padding: 4 },

@@ -1,7 +1,43 @@
-import { next } from "@vercel/functions";
+import { next, ipAddress } from "@vercel/functions";
+import { kv } from "@vercel/kv";
 
 const COOKIE_NAME = "portfolio_auth";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+const MAX_LOGIN_ATTEMPTS = 8;
+const LOGIN_WINDOW_SECONDS = 5 * 60;
+
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+async function getFailedAttempts(ip) {
+  try {
+    return (await kv.get(`login_fail:${ip}`)) || 0;
+  } catch {
+    return 0; // fail open if KV is unreachable — don't lock everyone out
+  }
+}
+
+async function recordFailedAttempt(ip, attempts) {
+  try {
+    await kv.set(`login_fail:${ip}`, attempts + 1, { ex: LOGIN_WINDOW_SECONDS });
+  } catch {
+    // ignore — rate limiting is best-effort
+  }
+}
+
+async function clearFailedAttempts(ip) {
+  try {
+    await kv.del(`login_fail:${ip}`);
+  } catch {
+    // ignore
+  }
+}
 
 function parseCookies(header) {
   const cookies = {};
@@ -22,7 +58,7 @@ async function sha256Hex(text) {
     .join("");
 }
 
-function loginPage(error) {
+function loginPage(error, status = 401) {
   return new Response(
     `<!doctype html>
 <html lang="en">
@@ -32,7 +68,7 @@ function loginPage(error) {
 <title>Portfolio Ops — Sign in</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #0B0E14; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  body { margin: 0; min-height: 100vh; padding: 16px; display: flex; align-items: center; justify-content: center; background: #0B0E14; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
   form { width: 100%; max-width: 320px; padding: 28px; border: 1px solid #1B2028; border-radius: 12px; background: #0E1219; }
   h1 { font-size: 15px; font-weight: 700; color: #E8EAED; letter-spacing: 0.08em; margin: 0 0 4px; }
   p { font-size: 11.5px; color: #6B7280; margin: 0 0 18px; }
@@ -51,7 +87,7 @@ function loginPage(error) {
   </form>
 </body>
 </html>`,
-    { status: 401, headers: { "content-type": "text/html; charset=utf-8" } }
+    { status, headers: { "content-type": "text/html; charset=utf-8" } }
   );
 }
 
@@ -69,9 +105,17 @@ export default async function middleware(request) {
   const expectedHash = await sha256Hex(expected);
 
   if (request.method === "POST" && url.pathname === "/api/login") {
+    const ip = ipAddress(request) || "unknown";
+    const attempts = await getFailedAttempts(ip);
+    if (attempts >= MAX_LOGIN_ATTEMPTS) {
+      return loginPage("Too many attempts — try again in a few minutes.", 429);
+    }
+
     const form = await request.formData();
-    const password = form.get("password") || "";
-    if (password === expected) {
+    const password = String(form.get("password") || "");
+
+    if (timingSafeEqual(password, expected)) {
+      await clearFailedAttempts(ip);
       const res = new Response(null, { status: 303, headers: { Location: "/" } });
       res.headers.append(
         "Set-Cookie",
@@ -79,6 +123,8 @@ export default async function middleware(request) {
       );
       return res;
     }
+
+    await recordFailedAttempt(ip, attempts);
     return loginPage("Wrong password — try again.");
   }
 
