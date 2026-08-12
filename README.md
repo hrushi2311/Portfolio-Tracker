@@ -7,20 +7,25 @@ news via web search — meant to replace a daily 15-30 min check-in call.
 ## How it works
 
 - **Frontend**: React + Vite (`src/`)
-- **Backend**: Vercel serverless functions (`api/`) that call the Anthropic API server-side,
+- **Backend**: Vercel serverless functions (`api/`) that call the OpenAI API server-side,
   so your API key never reaches the browser
 - **Storage**: Vercel KV (a hosted Redis), shared by anyone who opens the site — you and your
   cousin will always see the same data
+- **Access control**: a shared-password gate (`middleware.js`) sits in front of the entire
+  site, including the `/api` routes — nobody gets in without the password, so a stranger
+  who finds the URL can't view your data or run up your OpenAI bill
 
 ## 1. Prerequisites
 
 - A [GitHub](https://github.com) account (free)
 - [Git](https://git-scm.com/downloads) and [Node.js 18+](https://nodejs.org) installed on your machine
 - A [Vercel](https://vercel.com) account (free tier) — sign up with your GitHub account, it's faster
-- An [Anthropic API key](https://console.anthropic.com) — go to Settings -> API Keys. You'll need
-  to add a payment method under Settings -> Billing. Usage here is pay-per-use (not a flat
-  subscription) — for one household's daily brief + occasional new-holding lookups, expect this
-  to be a light monthly cost, but keep an eye on the usage dashboard for the first week or two.
+- An [OpenAI API key](https://platform.openai.com) — go to Settings -> API Keys. You'll need
+  to add a payment method under Settings -> Billing, and your account needs access to a model
+  that supports the `web_search` tool in the Responses API (e.g. `gpt-4.1`). Usage here is
+  pay-per-use (not a flat subscription) — for one household's daily brief + occasional
+  new-holding lookups, expect this to be a light monthly cost, but keep an eye on the usage
+  dashboard for the first week or two.
 
 ## 2. Push this project to GitHub
 
@@ -49,7 +54,9 @@ git push -u origin main
    Database** -> choose **KV** -> connect it to this project. This automatically adds the
    `KV_REST_API_URL` and `KV_REST_API_TOKEN` environment variables for you.
 4. Go to **Settings -> Environment Variables** and add:
-   - `ANTHROPIC_API_KEY` = the key you generated in step 1
+   - `OPENAI_API_KEY` = the key you generated in step 1
+   - `APP_PASSWORD` = a password of your choice to gate access to the whole site (leave unset
+     to disable the gate — **not recommended once the URL is public**)
 5. Deploy (or redeploy if it already ran once before you added the env vars).
 
 You'll get a live URL like `portfolio-ops-yourname.vercel.app` — share that with your cousin
@@ -85,6 +92,7 @@ work locally too.
 │   ├── main.jsx
 │   └── index.css
 ├── index.html
+├── middleware.js            # Shared-password gate for the whole site (Vercel Routing Middleware)
 ├── package.json
 └── vercel.json
 ```

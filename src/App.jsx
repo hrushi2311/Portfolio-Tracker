@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { TrendingUp, TrendingDown, Minus, RadioTower, CalendarClock, Wallet, RefreshCw, Plus, X, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, RadioTower, CalendarClock, Wallet, RefreshCw, Plus, X, Loader2, ChevronDown, ChevronUp, BookOpen, CheckSquare, Square } from "lucide-react";
 
 const SEED_HOLDINGS = [
   { ticker: "NVIDIA", sector: "AI & Semiconductors", what: "AI GPUs and data center chips", up: "AI demand, cloud spending, earnings beats", down: "China restrictions, lower AI spending", events: "Earnings, AI conferences, major customer spending", price: 196.93, ma20: 201.92, ma50: 209.6, ma200: 191.26, rsi: 43.5, short: "good", long: "excellent", decision: "Accumulate", buyZone: "195–197 / 191–193" },
@@ -23,7 +23,47 @@ const SEED_EVENTS = [
   { name: "PPI (Producer Inflation)", detail: "Wholesale inflation report", tag: "Monthly" },
 ];
 
-const RULES = `Portfolio rules: keep 30–40% cash at all times. On short-term positions, exit at 15–20% profit if markets are volatile. On long-term positions, take a partial exit (sell ~50–75%) at 15–20% profit and let the rest ride. Annual target: 20% portfolio return.`;
+const TRADING_RULES = [
+  {
+    category: "Monitor the Recent Trade Buy",
+    items: [
+      { label: "Short-term positions", detail: "Exit at **15–20% profit** if markets are volatile." },
+      { label: "Long-term positions", detail: "Take a partial exit at **15–20% profit**, selling approximately **50–75%** of the holding." },
+    ],
+  },
+  {
+    category: "Monitor All Holdings in the Portfolio",
+    items: [
+      { detail: "Review all current holdings daily." },
+      { detail: "Check whether any action is needed based on price movement, news, or market conditions." },
+    ],
+  },
+  {
+    category: "Maintain Cash Position",
+    items: [{ detail: "Keep **30–40% cash** available at any point in time." }],
+  },
+  {
+    category: "Set Stop-Losses",
+    items: [{ detail: "Ensure **all holdings have a stop-loss** in place." }],
+  },
+  {
+    category: "Daily Monitoring",
+    items: [
+      { detail: "Track market movements and portfolio performance regularly." },
+      { detail: "Watch for important news, earnings, corporate actions, and major events affecting holdings." },
+    ],
+  },
+];
+
+const DAILY_QUESTIONS = [
+  "Any new stocks bought today?",
+  "Did any stock reach the 15–20% profit target?",
+  "Were any partial exits taken?",
+  "Is the cash position still between 30–40%?",
+  "Are stop-losses set for all holdings?",
+  "Any stock requiring action due to news or events?",
+  "Any upcoming earnings, results, dividends, or announcements?",
+];
 
 const signalColor = (level) => {
   const l = (level || "").toLowerCase();
@@ -31,6 +71,20 @@ const signalColor = (level) => {
   if (l.includes("average") || l.includes("wait")) return "#E8B94A";
   if (l.includes("weak")) return "#E86A5C";
   return "#6B7280";
+};
+
+const formatBuyZone = (zone) => {
+  if (!zone) return "—";
+  return zone.replace(/(?<!\$)(\d+(\.\d+)?)/g, "$$$1");
+};
+
+const formatPct = (pctNum) => (Number.isFinite(pctNum) ? `${pctNum >= 0 ? "+" : "-"}${Math.abs(pctNum)}%` : "—");
+
+const trendIcon = (h) => {
+  if (h.price == null || h.ma50 == null) return <Minus size={13} color="#6B7280" />;
+  if (h.price > h.ma50) return <TrendingUp size={13} color="#5FD98A" />;
+  if (h.price < h.ma50) return <TrendingDown size={13} color="#E86A5C" />;
+  return <Minus size={13} color="#6B7280" />;
 };
 
 async function apiGet(path, fallback) {
@@ -72,6 +126,15 @@ export default function App() {
   const [holdingError, setHoldingError] = useState(null);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError, setEventsError] = useState(null);
+  const [sectorFilter, setSectorFilter] = useState("All");
+  const [refreshingTicker, setRefreshingTicker] = useState(null);
+  const [refreshingAll, setRefreshingAll] = useState(false);
+  const [refreshAllProgress, setRefreshAllProgress] = useState({ done: 0, total: 0 });
+  const [checkedQuestions, setCheckedQuestions] = useState([]);
+
+  const toggleQuestion = (i) => {
+    setCheckedQuestions((prev) => (prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i]));
+  };
 
   useEffect(() => {
     (async () => {
@@ -101,13 +164,13 @@ export default function App() {
   };
 
   const handleAddHolding = async () => {
-    const ticker = newTicker.trim();
-    if (!ticker) return;
+    const query = newTicker.trim();
+    if (!query) return;
     setHoldingLoading(true);
     setHoldingError(null);
     try {
-      const result = await apiPost("/api/analyze-holding", { ticker });
-      const next = [...holdings.filter((h) => h.ticker.toLowerCase() !== ticker.toLowerCase()), result];
+      const result = await apiPost("/api/analyze-holding", { ticker: query });
+      const next = [...holdings.filter((h) => h.ticker.toLowerCase() !== result.ticker.toLowerCase()), result];
       setHoldings(next);
       persist("/api/holdings", next);
       setNewTicker("");
@@ -117,6 +180,47 @@ export default function App() {
     } finally {
       setHoldingLoading(false);
     }
+  };
+
+  const refreshHolding = async (ticker) => {
+    setRefreshingTicker(ticker);
+    try {
+      const result = await apiPost("/api/analyze-holding", { ticker });
+      const next = holdings.map((h) => (h.ticker === ticker ? result : h));
+      setHoldings(next);
+      persist("/api/holdings", next);
+    } catch (e) {
+      console.error("refresh failed", e);
+    } finally {
+      setRefreshingTicker(null);
+    }
+  };
+
+  const refreshAllHoldings = async () => {
+    if (refreshingAll || holdings.length === 0) return;
+    setRefreshingAll(true);
+    setRefreshAllProgress({ done: 0, total: holdings.length });
+    const tickers = holdings.map((h) => h.ticker);
+    const results = new Map();
+    const concurrency = 3;
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < tickers.length) {
+        const ticker = tickers[nextIndex++];
+        try {
+          results.set(ticker, await apiPost("/api/analyze-holding", { ticker }));
+        } catch (e) {
+          console.error(`refresh failed for ${ticker}`, e);
+        } finally {
+          setRefreshAllProgress((p) => ({ ...p, done: p.done + 1 }));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, tickers.length) }, worker));
+    const next = holdings.map((h) => results.get(h.ticker) || h);
+    setHoldings(next);
+    persist("/api/holdings", next);
+    setRefreshingAll(false);
   };
 
   const removeHolding = (ticker) => {
@@ -146,8 +250,8 @@ export default function App() {
     setLoadingBrief(true);
     setBriefError(null);
     try {
-      const { text } = await apiPost("/api/daily-brief", { holdings, events });
-      const entry = { date: new Date().toISOString(), text };
+      const brief = await apiPost("/api/daily-brief", { holdings, events });
+      const entry = { date: new Date().toISOString(), ...brief };
       const next = [entry, ...briefs].slice(0, 30);
       setBriefs(next);
       persist("/api/briefs", next);
@@ -158,12 +262,27 @@ export default function App() {
     }
   };
 
+  const removeBrief = (index) => {
+    const next = briefs.filter((_, idx) => idx !== index);
+    setBriefs(next);
+    persist("/api/briefs", next);
+  };
+
+  const clearBriefs = () => {
+    if (briefs.length && !window.confirm("Clear all brief history? This can't be undone.")) return;
+    setBriefs([]);
+    persist("/api/briefs", []);
+  };
+
   const goalPct = (() => {
     const s = parseFloat(portfolio.startValue);
     const c = parseFloat(portfolio.currentValue);
     if (!s || !c) return null;
     return ((c - s) / s) * 100;
   })();
+
+  const sectors = ["All", ...Array.from(new Set(holdings.map((h) => h.sector))).sort()];
+  const filteredHoldings = sectorFilter === "All" ? holdings : holdings.filter((h) => h.sector === sectorFilter);
 
   return (
     <div style={styles.app}>
@@ -205,6 +324,7 @@ export default function App() {
           ["events", "Events", CalendarClock],
           ["brief", "Daily Brief", RadioTower],
           ["goal", "Goal Tracker", Wallet],
+          ["playbook", "Playbook", BookOpen],
         ].map(([key, label, Icon]) => (
           <button key={key} onClick={() => setTab(key)} style={{ ...styles.tab, ...(tab === key ? styles.tabActive : {}) }}>
             <Icon size={14} strokeWidth={2} />
@@ -217,14 +337,27 @@ export default function App() {
         {tab === "holdings" && (
           <div>
             <div style={styles.sectionHead}>
-              <span>{holdings.length} positions</span>
-              <span style={styles.mutedSmall}>Tap a row for the thesis</span>
+              <span>{filteredHoldings.length} position{filteredHoldings.length === 1 ? "" : "s"}{sectorFilter !== "All" ? ` · ${sectorFilter}` : ""}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={styles.mutedSmall}>Tap a row for the thesis</span>
+                <select value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)} style={styles.sectorSelect}>
+                  {sectors.map((s) => (
+                    <option key={s} value={s}>{s === "All" ? "All sectors" : s}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {!addingHolding ? (
-              <button onClick={() => setAddingHolding(true)} style={{ ...styles.addBtn, marginBottom: 14 }}>
-                <Plus size={14} /> Add holding
-              </button>
+              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                <button onClick={() => setAddingHolding(true)} disabled={refreshingAll} style={{ ...styles.addBtn, flex: 1 }}>
+                  <Plus size={14} /> Add holding
+                </button>
+                <button onClick={refreshAllHoldings} disabled={refreshingAll} style={styles.refreshAllBtn}>
+                  {refreshingAll ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                  {refreshingAll ? `Refreshing ${refreshAllProgress.done}/${refreshAllProgress.total}…` : "Refresh all"}
+                </button>
+              </div>
             ) : (
               <div style={{ ...styles.eventCard, marginBottom: 14, alignItems: "flex-start" }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
@@ -255,13 +388,13 @@ export default function App() {
               <table style={styles.table}>
                 <thead>
                   <tr>
-                    {["Ticker", "Price", "RSI", "Short-Term", "Long-Term", "Decision", "Buy Zone"].map((h) => (
-                      <th key={h} style={styles.th}>{h}</th>
+                    {["Ticker", "Price", "RSI", "Short-Term", "Long-Term", "Decision", "Buy Zone", ""].map((h, i) => (
+                      <th key={i} style={styles.th}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {holdings.map((h) => (
+                  {filteredHoldings.map((h) => (
                     <React.Fragment key={h.ticker}>
                       <tr style={styles.tr} onClick={() => setExpanded(expanded === h.ticker ? null : h.ticker)}>
                         <td style={{ ...styles.td, fontWeight: 600, color: "#F0F2F6" }}>
@@ -270,16 +403,31 @@ export default function App() {
                             {h.ticker}
                           </span>
                         </td>
-                        <td style={styles.tdMono}>{h.price != null ? `$${h.price}` : "—"}</td>
+                        <td style={styles.tdMono}>
+                          <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                            {trendIcon(h)}
+                            {h.price != null ? `$${h.price}` : "—"}
+                          </span>
+                        </td>
                         <td style={styles.tdMono}>{h.rsi ?? "—"}</td>
                         <td style={styles.td}><Dot color={signalColor(h.short)} label={h.short} /></td>
                         <td style={styles.td}><Dot color={signalColor(h.long)} label={h.long} /></td>
                         <td style={{ ...styles.td, color: "#C7CCD6" }}>{h.decision}</td>
-                        <td style={styles.tdMono}>{h.buyZone}</td>
+                        <td style={styles.tdMono}>{formatBuyZone(h.buyZone)}</td>
+                        <td style={styles.td} onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => refreshHolding(h.ticker)}
+                            disabled={refreshingTicker === h.ticker || refreshingAll}
+                            style={styles.rowRefreshBtn}
+                            title={`Refresh ${h.ticker}`}
+                          >
+                            {refreshingTicker === h.ticker ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+                          </button>
+                        </td>
                       </tr>
                       {expanded === h.ticker && (
                         <tr>
-                          <td colSpan={7} style={styles.expandCell}>
+                          <td colSpan={8} style={styles.expandCell}>
                             <div style={styles.expandGrid}>
                               <div><div style={styles.expandLabel}>Sector</div><div style={styles.expandVal}>{h.sector}</div></div>
                               <div><div style={styles.expandLabel}>What it does</div><div style={styles.expandVal}>{h.what}</div></div>
@@ -335,22 +483,31 @@ export default function App() {
 
         {tab === "brief" && (
           <div>
-            <div style={styles.sectionHead}>
-              <span>Replaces the daily call — generates from live web data</span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: briefError ? 14 : 0 }}>
+              <button onClick={generateBrief} disabled={loadingBrief} style={{ ...styles.generateBtn, marginBottom: 0 }}>
+                {loadingBrief ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
+                {loadingBrief ? "Researching holdings & events…" : "Generate today's brief"}
+              </button>
+              {briefs.length > 0 && (
+                <button onClick={clearBriefs} style={styles.clearHistoryBtn}>
+                  Clear history
+                </button>
+              )}
             </div>
-            <button onClick={generateBrief} disabled={loadingBrief} style={styles.generateBtn}>
-              {loadingBrief ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
-              {loadingBrief ? "Researching holdings & events…" : "Generate today's brief"}
-            </button>
             {briefError && <div style={styles.errorBox}>{briefError}</div>}
             {!ready ? null : briefs.length === 0 && !loadingBrief ? (
-              <div style={styles.emptyState}>No brief generated yet today. Tap the button above — it checks live prices, news, and your event watchlist.</div>
+              <div style={{ ...styles.emptyState, marginTop: 16 }}>No brief generated yet today. Tap the button above — it checks live prices, news, and your event watchlist.</div>
             ) : (
-              <div style={styles.briefList}>
+              <div style={{ ...styles.briefList, marginTop: 16 }}>
                 {briefs.map((b, i) => (
                   <div key={i} style={styles.briefCard}>
-                    <div style={styles.briefDate}>{new Date(b.date).toLocaleString()}</div>
-                    <div style={styles.briefText}>{b.text}</div>
+                    <div style={styles.briefCardHead}>
+                      <div style={styles.briefDate}>{new Date(b.date).toLocaleString()}</div>
+                      <button onClick={() => removeBrief(i)} style={styles.iconBtn} title="Delete this brief">
+                        <X size={14} color="#6B7280" />
+                      </button>
+                    </div>
+                    {b.text ? <BriefContent text={b.text} /> : <StructuredBrief brief={b} />}
                   </div>
                 ))}
               </div>
@@ -391,13 +548,254 @@ export default function App() {
                 <div style={styles.mutedSmall}>{goalPct >= 20 ? "Target reached." : `${(20 - goalPct).toFixed(1)} points to go to hit the 20% target.`}</div>
               </div>
             )}
-            <div style={styles.rulesBox}>
-              <div style={styles.expandLabel}>Standing rules</div>
-              <div style={styles.expandVal}>{RULES}</div>
+          </div>
+        )}
+
+        {tab === "playbook" && (
+          <div>
+            <div style={styles.sectionHead}><span>Standing trading rules &amp; daily check-in checklist</span></div>
+
+            <div style={styles.rulesGrid}>
+              {TRADING_RULES.map((group, gi) => (
+                <div key={gi} style={styles.ruleCard}>
+                  <div style={styles.ruleCardTitle}>{group.category}</div>
+                  {group.items.map((item, ii) => (
+                    <div key={ii} style={styles.ruleItem}>
+                      {item.label && <div style={styles.ruleItemLabel}>{item.label}</div>}
+                      <div style={styles.ruleItemDetail}>{renderInline(item.detail, `r${gi}-${ii}`)}</div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ ...styles.sectionHead, marginTop: 28 }}><span>Daily check-in questions</span></div>
+            <div style={styles.checklistBox}>
+              {DAILY_QUESTIONS.map((q, i) => {
+                const checked = checkedQuestions.includes(i);
+                return (
+                  <button key={i} onClick={() => toggleQuestion(i)} style={styles.checklistItem}>
+                    {checked ? <CheckSquare size={16} color="#5FD98A" /> : <Square size={16} color="#5B6272" />}
+                    <span style={{ ...styles.checklistText, color: checked ? "#5B6272" : "#C7CCD6", textDecoration: checked ? "line-through" : "none" }}>
+                      {q}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+const INVISIBLE_CHARS_RE = new RegExp(
+  "[\\u2060\\u200B\\u200C\\u200D\\u200E\\u200F\\uFEFF\\u{E000}-\\u{F8FF}\\u{F0000}-\\u{FFFFD}\\u{100000}-\\u{10FFFD}]",
+  "gu"
+);
+
+function cleanBriefLine(line) {
+  return line
+    .replace(INVISIBLE_CHARS_RE, "")
+    .replace(/\s?cite\w*turn\d+\w*\d*/gi, "")
+    .replace(/\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\(\s*(?:www\.)?[a-z0-9-]+\.[a-z]{2,}(?:\.[a-z]{2,})?\s*\)/gi, "")
+    .replace(/\(\s*\)/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([.,;:])/g, "$1")
+    .trim();
+}
+
+function renderInline(line, keyPrefix) {
+  const re = /\*\*([^*]+)\*\*/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+  let i = 0;
+  while ((match = re.exec(line)) !== null) {
+    if (match.index > lastIndex) parts.push(line.slice(lastIndex, match.index));
+    parts.push(<strong key={`${keyPrefix}-${i++}`} style={styles.briefBold}>{match[1]}</strong>);
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < line.length) parts.push(line.slice(lastIndex));
+  return parts;
+}
+
+function BriefContent({ text }) {
+  const lines = text.split("\n");
+  return (
+    <div>
+      {lines.map((rawLine, i) => {
+        const trimmed = cleanBriefLine(rawLine);
+        if (!trimmed) return null;
+        if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) return null;
+
+        const boldHeader = trimmed.match(/^\*\*\s*(?:\d+\.\s*)?(.+?)\s*\*\*:?$/);
+        const plainHeader = trimmed.match(/^(?:\d+\.\s*)?([A-Z][A-Z0-9 &']{3,})\s*:?$/);
+        if (boldHeader) {
+          return <div key={i} style={styles.briefSectionHead}>{boldHeader[1].replace(/^\d+\.\s*/, "")}</div>;
+        }
+        if (plainHeader) {
+          return <div key={i} style={styles.briefSectionHead}>{plainHeader[1]}</div>;
+        }
+
+        const tickerPrice = trimmed.match(/^\*\*([A-Z][A-Z0-9.]{0,6})\*\*\s*[–—-]?\s*\$?([\d,]+\.?\d*)\s*\(([+-]?[\d.]+)%\)\.?\s*(.*)$/);
+        if (tickerPrice) {
+          const [, ticker, price, pct, rest] = tickerPrice;
+          const pctNum = parseFloat(pct);
+          const color = pctNum >= 0 ? "#5FD98A" : "#E86A5C";
+          return (
+            <div key={i} style={styles.briefTickerBlock}>
+              <div style={styles.briefTickerHead}>
+                <span style={styles.briefTickerSymbol}>{ticker}</span>
+                <span style={styles.briefTickerPrice}>${price}</span>
+                <span style={{ ...styles.briefTickerPct, color }}>{formatPct(pctNum)}</span>
+              </div>
+              {rest && <div style={styles.briefLine}>{renderInline(rest, `t${i}`)}</div>}
+            </div>
+          );
+        }
+
+        const tickerHeader = trimmed.match(/^([A-Z][A-Z0-9.]{1,5})\s*[–—-]\s*(.+)$/);
+        if (tickerHeader) {
+          return (
+            <div key={i} style={styles.briefTickerBlock}>
+              <div style={styles.briefTickerHead}>
+                <span style={styles.briefTickerSymbol}>{tickerHeader[1]}</span>
+                <span style={styles.briefTickerName}>{tickerHeader[2]}</span>
+              </div>
+            </div>
+          );
+        }
+
+        const labelMatch = trimmed.match(/^(Price|News|Detail|Update|Events?)\s*:\s*(.*)$/i);
+        if (labelMatch) {
+          const [, label, value] = labelMatch;
+          const pctInline = value.match(/^(.*?)\(([+-]?[\d.]+)%\)\s*$/);
+          if (/^price$/i.test(label) && pctInline) {
+            const pctNum = parseFloat(pctInline[2]);
+            const color = pctNum >= 0 ? "#5FD98A" : "#E86A5C";
+            return (
+              <div key={i} style={styles.briefLabelLine}>
+                <span style={styles.briefLabel}>{label}</span>
+                <span>
+                  {renderInline(pctInline[1].trim(), `p${i}`)}{" "}
+                  <span style={{ color, fontWeight: 600 }}>({formatPct(pctNum)})</span>
+                </span>
+              </div>
+            );
+          }
+          return (
+            <div key={i} style={styles.briefLabelLine}>
+              <span style={styles.briefLabel}>{label}</span>
+              <span>{renderInline(value, `v${i}`)}</span>
+            </div>
+          );
+        }
+
+        const bulletMatch = trimmed.match(/^[-•*]\s+(.*)/);
+        if (bulletMatch) {
+          return (
+            <div key={i} style={styles.briefBullet}>
+              <span style={styles.briefBulletDot}>•</span>
+              <span>{renderInline(bulletMatch[1], `l${i}`)}</span>
+            </div>
+          );
+        }
+
+        return <div key={i} style={styles.briefLine}>{renderInline(trimmed, `l${i}`)}</div>;
+      })}
+    </div>
+  );
+}
+
+function StructuredBrief({ brief }) {
+  const news = brief.news || [];
+  const withNews = news.filter((n) => n.hasNews).map((n) => n.ticker);
+  const withoutNews = news.filter((n) => !n.hasNews).map((n) => n.ticker);
+
+  return (
+    <div>
+      {brief.marketSnapshot && (
+        <>
+          <div style={styles.briefSectionHead}>Market Snapshot</div>
+          <div style={styles.briefLine}>{brief.marketSnapshot}</div>
+        </>
+      )}
+
+      {news.length > 0 && (
+        <>
+          <div style={styles.briefSectionHead}>News &amp; Updates</div>
+          {news.map((n, i) => {
+            const pctNum = typeof n.pct === "number" ? n.pct : parseFloat(n.pct);
+            const color = Number.isFinite(pctNum) ? (pctNum >= 0 ? "#5FD98A" : "#E86A5C") : "#6B7280";
+            return (
+              <div key={i} style={styles.briefTickerBlock}>
+                <div style={styles.briefTickerHead}>
+                  <span style={styles.briefTickerSymbol}>{n.ticker}</span>
+                  {n.name && <span style={styles.briefTickerName}>{n.name}</span>}
+                </div>
+                <div style={styles.briefLabelLine}>
+                  <span style={styles.briefLabel}>Price</span>
+                  <span>
+                    {n.price != null ? `$${n.price}` : "—"}{" "}
+                    <span style={{ color, fontWeight: 600 }}>({formatPct(pctNum)})</span>
+                  </span>
+                </div>
+                {n.news && (
+                  <div style={styles.briefLabelLine}>
+                    <span style={styles.briefLabel}>News</span>
+                    <span>{n.news}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {(withNews.length > 0 || withoutNews.length > 0) && (
+            <div style={{ marginTop: 14 }}>
+              <div style={styles.briefSectionHead}>Summary of News &amp; Price Moves</div>
+              {withNews.length > 0 && (
+                <div style={styles.briefBullet}>
+                  <span style={styles.briefBulletDot}>•</span>
+                  <span>Fresh news: {withNews.join(", ")}</span>
+                </div>
+              )}
+              {withoutNews.length > 0 && (
+                <div style={styles.briefBullet}>
+                  <span style={styles.briefBulletDot}>•</span>
+                  <span>Price moves only, no material news: {withoutNews.join(", ")}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {brief.events && brief.events.length > 0 && (
+        <>
+          <div style={styles.briefSectionHead}>This Week's Events</div>
+          {brief.events.map((e, i) => (
+            <div key={i} style={styles.briefBullet}>
+              <span style={styles.briefBulletDot}>•</span>
+              <span><strong style={styles.briefBold}>{e.when}:</strong> {e.detail}</span>
+            </div>
+          ))}
+        </>
+      )}
+
+      <div style={styles.briefSectionHead}>Action Flags</div>
+      {brief.actionFlags && brief.actionFlags.length > 0 ? (
+        brief.actionFlags.map((flag, i) => (
+          <div key={i} style={styles.briefBullet}>
+            <span style={styles.briefBulletDot}>•</span>
+            <span>{flag}</span>
+          </div>
+        ))
+      ) : (
+        <div style={styles.briefLine}>No action flagged today.</div>
+      )}
     </div>
   );
 }
@@ -467,6 +865,8 @@ const styles = {
   main: { padding: "20px 24px", maxWidth: 980, margin: "0 auto" },
   sectionHead: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#8B93A7", marginBottom: 12 },
   mutedSmall: { fontSize: 11, color: "#5B6272" },
+  sectorSelect: { background: "#0E1219", border: "1px solid #2A3140", color: "#C7CCD6", padding: "6px 10px", borderRadius: 7, fontSize: 11.5, outline: "none", cursor: "pointer" },
+  rowRefreshBtn: { background: "transparent", border: "none", cursor: "pointer", color: "#6B7280", display: "flex", alignItems: "center", padding: 4 },
   tableWrap: { overflowX: "auto", border: "1px solid #1B2028", borderRadius: 10 },
   table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
   th: { textAlign: "left", padding: "10px 14px", fontSize: 10.5, color: "#6B7280", letterSpacing: "0.05em", borderBottom: "1px solid #1B2028", background: "#0E1219", whiteSpace: "nowrap" },
@@ -485,16 +885,39 @@ const styles = {
   eventDetail: { fontSize: 11.5, color: "#7A8194", marginTop: 2, lineHeight: 1.4 },
   iconBtn: { background: "transparent", border: "none", cursor: "pointer", flexShrink: 0 },
   addBtn: { display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px dashed #2A3140", color: "#8B93A7", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 12.5, width: "100%", justifyContent: "center" },
+  refreshAllBtn: { display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #2A3140", color: "#8B93A7", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 12.5, whiteSpace: "nowrap" },
   generateBtn: { display: "flex", alignItems: "center", gap: 8, background: "#E8B94A", color: "#0B0E14", border: "none", padding: "11px 18px", borderRadius: 9, fontWeight: 600, fontSize: 13, cursor: "pointer", marginBottom: 16 },
   errorBox: { color: "#E86A5C", fontSize: 12.5, marginBottom: 14, padding: "10px 12px", border: "1px solid #3A2323", borderRadius: 8, background: "#1A1113" },
   emptyState: { fontSize: 13, color: "#5B6272", padding: "30px 10px", textAlign: "center", border: "1px dashed #1B2028", borderRadius: 10 },
   briefList: { display: "flex", flexDirection: "column", gap: 14 },
   briefCard: { border: "1px solid #1B2028", borderRadius: 10, padding: "16px 18px", background: "#0E1219" },
-  briefDate: { fontSize: 10.5, color: "#5B6272", marginBottom: 10, letterSpacing: "0.04em" },
-  briefText: { fontSize: 13, color: "#C7CCD6", lineHeight: 1.7, whiteSpace: "pre-wrap" },
+  briefCardHead: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 },
+  briefDate: { fontSize: 10.5, color: "#5B6272", letterSpacing: "0.04em" },
+  clearHistoryBtn: { background: "transparent", border: "1px solid #2A3140", color: "#8B93A7", padding: "10px 14px", borderRadius: 9, fontSize: 12.5, cursor: "pointer" },
+  briefSectionHead: { fontSize: 11, fontWeight: 700, color: "#E8B94A", letterSpacing: "0.06em", marginTop: 18, marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid #1B2028" },
+  briefLine: { fontSize: 13, color: "#C7CCD6", lineHeight: 1.7, marginBottom: 6 },
+  briefBullet: { display: "flex", gap: 8, fontSize: 13, color: "#C7CCD6", lineHeight: 1.6, marginBottom: 5 },
+  briefBulletDot: { color: "#5B6272", flexShrink: 0 },
+  briefBold: { color: "#F0F2F6", fontWeight: 700 },
+  briefTickerBlock: { marginTop: 14, paddingTop: 10, borderTop: "1px solid #151A22" },
+  briefTickerHead: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 },
+  briefTickerSymbol: { fontSize: 12.5, fontWeight: 700, color: "#F0F2F6", fontFamily: "ui-monospace, monospace" },
+  briefTickerPrice: { fontSize: 12, color: "#8B93A7", fontFamily: "ui-monospace, monospace" },
+  briefTickerPct: { fontSize: 11.5, fontWeight: 700, fontFamily: "ui-monospace, monospace" },
+  briefTickerName: { fontSize: 11.5, color: "#6B7280" },
+  briefLabelLine: { display: "flex", gap: 8, fontSize: 13, color: "#C7CCD6", lineHeight: 1.6, marginBottom: 4 },
+  briefLabel: { fontSize: 10, fontWeight: 700, color: "#5B6272", letterSpacing: "0.05em", textTransform: "uppercase", flexShrink: 0, minWidth: 42, paddingTop: 2 },
   goalForm: { display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 20 },
   formLabel: { display: "flex", flexDirection: "column", gap: 6, fontSize: 11.5, color: "#8B93A7", flex: 1, minWidth: 200 },
   input: { background: "#0E1219", border: "1px solid #2A3140", color: "#E8EAED", padding: "9px 12px", borderRadius: 8, fontSize: 13, outline: "none" },
   goalSummary: { border: "1px solid #1B2028", borderRadius: 10, padding: "20px", marginBottom: 20, background: "#0E1219" },
-  rulesBox: { border: "1px solid #1B2028", borderRadius: 10, padding: "16px 18px", background: "#0E1219" },
+  rulesGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 },
+  ruleCard: { border: "1px solid #1B2028", borderRadius: 10, padding: "16px 18px", background: "#0E1219" },
+  ruleCardTitle: { fontSize: 12.5, fontWeight: 700, color: "#E8B94A", marginBottom: 10, letterSpacing: "0.03em" },
+  ruleItem: { marginBottom: 10 },
+  ruleItemLabel: { fontSize: 11, fontWeight: 600, color: "#8B93A7", marginBottom: 2, letterSpacing: "0.03em" },
+  ruleItemDetail: { fontSize: 13, color: "#C7CCD6", lineHeight: 1.55 },
+  checklistBox: { display: "flex", flexDirection: "column", gap: 2, border: "1px solid #1B2028", borderRadius: 10, background: "#0E1219", padding: "6px 8px" },
+  checklistItem: { display: "flex", alignItems: "center", gap: 10, background: "transparent", border: "none", cursor: "pointer", padding: "10px 8px", borderRadius: 8, textAlign: "left", width: "100%" },
+  checklistText: { fontSize: 13, lineHeight: 1.4 },
 };
