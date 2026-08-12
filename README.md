@@ -27,28 +27,9 @@ prices and news via web search — built to replace a recurring manual status ch
   new-holding lookups, expect this to be a light monthly cost, but keep an eye on the usage
   dashboard for the first week or two.
 
-## 2. Push this project to GitHub
+## 2. Deploy on Vercel
 
-From inside this folder:
-
-```bash
-git init
-git add .
-git commit -m "Initial commit: portfolio ops dashboard"
-```
-
-Then create a new empty repository on GitHub (github.com -> New repository — don't initialize
-it with a README, since you already have one), and push:
-
-```bash
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
-git branch -M main
-git push -u origin main
-```
-
-## 3. Deploy on Vercel
-
-1. Go to [vercel.com/new](https://vercel.com/new) and import the GitHub repo you just pushed.
+1. Go to [vercel.com/new](https://vercel.com/new) and import this project's GitHub repo.
 2. Vercel will auto-detect Vite — leave the default build settings as-is.
 3. Before the first deploy (or right after), go to your project's **Storage** tab -> **Create
    Database** -> choose **KV** -> connect it to this project. This automatically adds the
@@ -65,7 +46,7 @@ git push -u origin main
 You'll get a live URL like `portfolio-ops-yourname.vercel.app` — share that with whoever
 should have access, and you'll all be looking at the same live data.
 
-## 4. Running it locally (optional, for testing before you deploy)
+## 3. Running it locally (optional, for testing before you deploy)
 
 ```bash
 npm install
