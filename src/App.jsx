@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { TrendingUp, TrendingDown, Minus, RadioTower, CalendarClock, Wallet, RefreshCw, Plus, X, Loader2, ChevronDown, ChevronUp, BookOpen, CheckSquare, Square } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, RadioTower, CalendarClock, Wallet, RefreshCw, Plus, X, Loader2, ChevronDown, ChevronUp, BookOpen, CheckSquare, Square, Github } from "lucide-react";
 
 const SEED_HOLDINGS = [
   { ticker: "NVIDIA", sector: "AI & Semiconductors", what: "AI GPUs and data center chips", up: "AI demand, cloud spending, earnings beats", down: "China restrictions, lower AI spending", events: "Earnings, AI conferences, major customer spending", price: 196.93, ma20: 201.92, ma50: 209.6, ma200: 191.26, rsi: 43.5, short: "good", long: "excellent", decision: "Accumulate", buyZone: "195–197 / 191–193" },
@@ -321,6 +321,15 @@ export default function App() {
             {goalPct == null ? "— set values below" : `${goalPct >= 0 ? "+" : ""}${goalPct.toFixed(1)}%`}
           </div>
         </div>
+        <a
+          href="https://github.com/hrushi2311/Portfolio-Tracker"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={styles.githubLink}
+        >
+          <Github size={14} />
+          Source on GitHub
+        </a>
       </header>
 
       <nav className="app-tabs" style={styles.tabs}>
@@ -859,6 +868,7 @@ const styles = {
   headerLeft: { display: "flex", alignItems: "center", gap: 10 },
   headerTitle: { fontSize: 15, fontWeight: 700, letterSpacing: "0.08em" },
   headerSub: { fontSize: 11.5, color: "#6B7280", marginTop: 2 },
+  githubLink: { display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "#6B7280", textDecoration: "none", border: "1px solid #1B2028", borderRadius: 8, padding: "6px 10px", alignSelf: "center" },
   goalWrap: { minWidth: 220 },
   goalLabel: { fontSize: 10.5, color: "#6B7280", letterSpacing: "0.06em", marginBottom: 6 },
   goalBarTrack: { width: "100%", height: 5, background: "#1B2028", borderRadius: 3, overflow: "hidden" },
