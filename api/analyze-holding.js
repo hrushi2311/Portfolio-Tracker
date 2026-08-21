@@ -39,6 +39,11 @@ function stripCitations(text) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   if (!requireAuth(req, res)) return;
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(503).json({
+      error: "AI features are disabled in this demo — clone the repo and add your own OpenAI API key to enable them.",
+    });
+  }
 
   const raw = req.body?.ticker;
   const ticker = typeof raw === "string" ? raw.trim() : "";
