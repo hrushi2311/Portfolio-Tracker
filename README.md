@@ -7,6 +7,10 @@ prices and news via web search — built to replace a recurring manual status ch
 This project is free and open source (MIT licensed) — clone it and deploy your own copy at
 no cost to you beyond what's described below.
 
+**[Live demo](https://portfolio-tracker-demo-nu.vercel.app/)** — no login required, seed
+portfolio data, AI features disabled (no API key configured). Clone this repo and follow the
+steps below to run your own copy with AI enabled using your own OpenAI key.
+
 ## Cost: what's free, what isn't
 
 Cloning and deploying this project costs nothing. The one exception is the AI features
